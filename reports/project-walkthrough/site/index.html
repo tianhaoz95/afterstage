@@ -1,0 +1,443 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>afterstage walkthrough</title>
+<meta name="description" content="Design, implementation and testing walkthrough for afterstage — extend a video clip with on-device generative AI on a DGX Spark.">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='8' fill='%236d4aff'/><path d='M9 22l7-12 7 12' stroke='white' stroke-width='3' fill='none' stroke-linecap='round' stroke-linejoin='round'/></svg>">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="inner">
+    <a class="brand" href="#top">after<span>stage</span></a>
+    <nav class="nav" id="nav">
+      <a href="#why">Idea</a>
+      <a href="#architecture">Architecture</a>
+      <a href="#pipeline">Pipeline</a>
+      <a href="#graphs">ComfyUI graphs</a>
+      <a href="#cache">Caching</a>
+      <a href="#memory">Memory</a>
+      <a href="#safety">On-device &amp; safety</a>
+      <a href="#testing">Testing guide</a>
+      <a href="#status">Status</a>
+      <a href="#repo">Repo map</a>
+    </nav>
+    <button class="theme-btn" id="theme-btn" title="Toggle theme" aria-label="Toggle theme">◐</button>
+  </div>
+</header>
+
+<main id="top">
+<!-- ================================================================ HERO -->
+<section class="hero">
+  <div class="kicker">Project walkthrough</div>
+  <h1><span class="grad">afterstage</span></h1>
+  <p class="lede">Give it a clip and a sentence; it continues the story. A K-pop concert clip plus <em>“a cosy podcast right after the show”</em> becomes the original clip → a seamless transition into a studio → members talking in their own cloned voices, lip-synced, subtitled, with a music bed. <strong>Every model runs on one NVIDIA DGX Spark. No cloud APIs.</strong></p>
+  <div class="stats" id="stats">
+    <div class="stat"><b id="stat-loc">—</b><span>lines of Python</span></div>
+    <div class="stat"><b id="stat-tests">—</b><span>automated tests</span></div>
+    <div class="stat"><b>9</b><span>local models</span></div>
+    <div class="stat"><b id="stat-gb">—</b><span>GB of ComfyUI weights</span></div>
+  </div>
+  <div class="pipeline-wrap reveal">
+    <div class="pipe-scroll"><svg id="pipeline-svg" viewBox="0 0 1100 230" role="img" aria-label="Animated pipeline: analyze, write, voice, design, render, edit"></svg></div>
+    <div class="pipe-caption" id="pipe-caption"></div>
+    <div class="controls">
+      <button class="btn" id="pipe-toggle" aria-pressed="false">⏸ Pause</button>
+      <span class="muted">Click a stage to jump to its deep dive.</span>
+    </div>
+  </div>
+</section>
+
+<!-- ================================================================ WHY -->
+<section id="why">
+  <div class="kicker">01 · The idea</div>
+  <h2>Don't generate a movie — run a tiny film studio</h2>
+  <div class="grid-2">
+    <div>
+      <p>Open video models produce <strong>about 5 seconds</strong> per generation (Wan: 81 frames at 16 fps), and characters drift between generations. A 90-second podcast can't come from one prompt.</p>
+      <p>So afterstage plans first, then generates many small, controllable pieces and edits them together — exactly how a production crew works:</p>
+      <ul>
+        <li><strong>Analyst</strong> — watches the clip, learns who's in it (faces, voices, outfits, style).</li>
+        <li><strong>Writer</strong> — a local LLM turns your request into a shot list (<code>screenplay.json</code>).</li>
+        <li><strong>Voice actors</strong> — a voice-cloning TTS speaks every line.</li>
+        <li><strong>Production designer</strong> — composes one keyframe per shot from cast reference crops.</li>
+        <li><strong>Camera crew</strong> — lip-sync and image-to-video models animate each keyframe.</li>
+        <li><strong>Editor</strong> — ffmpeg cuts it into one film.</li>
+      </ul>
+      <p>The two JSON documents in the middle — <code>cast.json</code> and <code>screenplay.json</code> — are <em>human-editable</em>. That's the core design bet: AI does the work, you stay the director.</p>
+    </div>
+    <div class="viz">
+      <svg id="why-svg" viewBox="0 0 520 300" aria-label="One generation covers 5 seconds; a screenplay of many shots covers minutes"></svg>
+      <div class="controls"><button class="btn" id="why-replay">↻ Replay</button></div>
+    </div>
+  </div>
+</section>
+
+<!-- ================================================================ ARCHITECTURE -->
+<section id="architecture">
+  <div class="kicker">02 · System architecture</div>
+  <h2>Three local processes on one box</h2>
+  <p class="lede">The <code>afterstage</code> Python process orchestrates. Heavy diffusion runs in <strong>ComfyUI</strong>; the LLM and VLM run in <strong>Ollama</strong>; analysis and TTS run in-process. Everything binds to <code>127.0.0.1</code>, and a locality guard refuses any endpoint that resolves to a public IP.</p>
+  <div class="controls" id="arch-buttons"></div>
+  <div class="viz reveal"><svg id="arch-svg" viewBox="0 0 1100 470" aria-label="Architecture diagram"></svg></div>
+  <div class="grid-3">
+    <div class="card"><h3>afterstage (Python 3.12, cu130 torch)</h3><p class="muted">CLI + Gradio UI, project cache, scene/face/ASR/Demucs analysis, Chatterbox TTS, ffmpeg editor, ComfyUI &amp; LLM clients.</p></div>
+    <div class="card"><h3>ComfyUI :8188</h3><p class="muted">Qwen-Image-Edit-2511, InfiniteTalk on Wan2.1-14B, Wan2.2-A14B I2V/FLF, ACE-Step 1.5. Core nodes only — graphs are built in Python and validated against <code>/object_info</code> before queueing.</p></div>
+    <div class="card"><h3>Ollama :11434</h3><p class="muted">Qwen3-32B writes the screenplay with JSON-schema constrained output; Qwen3-VL-8B captions scenes and outfits. Unloaded (<code>keep_alive: 0</code>) before diffusion starts to free unified memory.</p></div>
+  </div>
+</section>
+
+<!-- ================================================================ PIPELINE -->
+<section id="pipeline">
+  <div class="kicker">03 · Pipeline deep dive</div>
+  <h2>Six stages, each cached and resumable</h2>
+  <p class="lede">Each stage reads the previous stage's artifacts from the project folder and writes its own. Pick a stage:</p>
+  <div class="tabs" role="tablist" id="stage-tabs"></div>
+
+  <!-- ANALYZE -->
+  <div class="panel" id="panel-analyze" role="tabpanel">
+    <div class="io"><div class="box">source clip (any length, any resolution)</div><div class="arrow">→</div><div class="box"><code>cast.json</code>: members (face/body crops, ArcFace centroid, appearance), scenes + captions, transcript, vocal stem, last frame</div></div>
+    <div class="grid-2">
+      <div>
+        <h3>What happens</h3>
+        <ol>
+          <li><strong>Shot detection</strong> — PySceneDetect content detector; scenes merged down to ≤24; one keyframe each.</li>
+          <li><strong>Audio</strong> — Demucs splits vocals from the concert mix; Whisper large-v3-turbo transcribes them with timestamps.</li>
+          <li><strong>People</strong> — sample frames at 2 fps, InsightFace (RetinaFace + ArcFace) gives a 512-d embedding per face, a greedy cosine clusterer groups them into members (≥1 s screen time). Best crops ranked by <em>detector score × frontalness × size</em>.</li>
+          <li><strong>Captions</strong> — Qwen3-VL describes each scene and each member's outfit; summary + visual style for the writer.</li>
+        </ol>
+        <p class="muted">Code: <code>afterstage/stages/analyze.py</code>, <code>analysis/faces.py</code>, <code>analysis/audio.py</code>, <code>analysis/scenes.py</code></p>
+      </div>
+      <div class="viz">
+        <h4 style="margin:0 0 6px">Face clustering, live</h4>
+        <canvas id="cluster-canvas" width="560" height="320"></canvas>
+        <div class="controls">
+          <label class="muted">join threshold <input type="range" id="cluster-th" min="0.20" max="0.80" step="0.01" value="0.45"> <b id="cluster-th-v">0.45</b></label>
+          <button class="btn" id="cluster-play">▶ Replay</button>
+        </div>
+        <p class="muted" id="cluster-stats">Illustration: detections stream in from sampled frames; each joins the most similar cluster above the threshold or starts a new one. Too low merges members; too high splits one person into several.</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- WRITE -->
+  <div class="panel" id="panel-write" role="tabpanel">
+    <div class="io"><div class="box"><code>cast.json</code> + your request (“an interview with an MC…”)</div><div class="arrow">→</div><div class="box"><code>screenplay.json</code>: sets, guests, shots (talk / broll / bridge), lines, visuals, motion, music prompt</div></div>
+    <div class="grid-2">
+      <div>
+        <h3>Structured writing with a repair loop</h3>
+        <p>The writer sends the cast brief to a local OpenAI-compatible server with <code>response_format: json_schema</code> generated from the pydantic <code>Screenplay</code> model. The reply is parsed (tolerating <code>&lt;think&gt;</code> blocks and fences) and then checked twice:</p>
+        <ul>
+          <li><strong>schema</strong> — pydantic validation</li>
+          <li><strong>semantics</strong> — <code>validate_against(cast)</code>: unknown member ids, missing sets, speakerless talk shots, lines &gt;400 chars, bridge not first…</li>
+        </ul>
+        <p>Problems are fed back verbatim as a new user turn; up to 3 attempts. Then a deterministic <code>normalise()</code> fixes ids and invariants the LLM shouldn't be trusted with. People the format needs but the clip lacks (an MC, a host) are declared as <code>guests</code> and become reference-less cast members.</p>
+        <p class="muted">Code: <code>afterstage/stages/write.py</code>, <code>afterstage/llm.py</code>, <code>afterstage/schema.py</code></p>
+      </div>
+      <div class="viz">
+        <h4 style="margin:0 0 6px">Repair loop</h4>
+        <svg id="repair-svg" viewBox="0 0 560 330"></svg>
+        <div class="controls"><button class="btn" id="repair-play">▶ Play</button></div>
+      </div>
+    </div>
+    <h3>Shot kinds</h3>
+    <div class="grid-3">
+      <div class="card"><span class="pill" style="color:var(--s-render)">talk</span><p>One member speaks one line (4–12 s). Rendered lip-synced from their keyframe + cloned voice.</p></div>
+      <div class="card"><span class="pill" style="color:var(--s-design)">broll</span><p>Silent 3–5 s cutaway: establishing shots, reactions, details, laughs.</p></div>
+      <div class="card"><span class="pill" style="color:var(--s-analyze)">bridge</span><p>Optional first shot: morphs from the source clip's last frame to the first new keyframe — the seam between real and generated footage.</p></div>
+    </div>
+  </div>
+
+  <!-- VOICE -->
+  <div class="panel" id="panel-voice" role="tabpanel">
+    <div class="io"><div class="box">each talk shot: line, language, emotion, speaker's voice sample</div><div class="arrow">→</div><div class="box"><code>audio/s04.wav</code> (24 kHz, +0.25 s breath pad)</div></div>
+    <div class="grid-2">
+      <div>
+        <h3>Chatterbox Multilingual, in-process</h3>
+        <p>Zero-shot voice cloning in 23 languages including Korean, with an <em>exaggeration</em> knob we drive from the shot's emotion. The model loads lazily — only if some line actually needs (re)voicing — and is released before diffusion.</p>
+        <p><strong>Voice samples matter most.</strong> Concert audio is singing over a band, so the best input is 5–20 s of clean speech per member (<code>afterstage set-voice … --file</code>). Fallback: a window of the Demucs vocal stem (<code>--start/--end</code>), or the model's default voice for guests.</p>
+        <table><thead><tr><th>emotion</th><th>exaggeration</th></tr></thead><tbody id="emo-table"></tbody></table>
+        <p class="muted">Code: <code>afterstage/tts/__init__.py</code>, <code>afterstage/stages/voice.py</code></p>
+      </div>
+      <div class="viz">
+        <h4 style="margin:0 0 6px">Per-line synthesis</h4>
+        <canvas id="wave-canvas" width="560" height="300"></canvas>
+        <div class="controls"><button class="btn" id="wave-play">▶ Replay</button></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- DESIGN -->
+  <div class="panel" id="panel-design" role="tabpanel">
+    <div class="io"><div class="box">set descriptions, shot visuals, cast reference crops</div><div class="arrow">→</div><div class="box"><code>sets/studio.png</code> plates + <code>keyframes/sNN.png</code> (one approved still per shot)</div></div>
+    <div class="grid-2">
+      <div>
+        <h3>Compose, then verify identity</h3>
+        <p>First an empty <strong>set plate</strong> per location (text-to-image). Then each shot's keyframe is composed by <strong>Qwen-Image-Edit-2511</strong> from up to three reference images: the set plate plus the two most relevant members (the speaker always included). The prompt names each reference (“Image 2 shows Ari…”) and pins wardrobe/hair continuity.</p>
+        <p>With InsightFace enabled, every candidate is scored: <em>min over characters of max cosine(ArcFace(face in keyframe), member centroid)</em>. Below 0.35 → re-roll with a new seed (≤2 retries), keep the best.</p>
+        <p class="muted">Code: <code>afterstage/stages/design.py</code>, <code>comfy/workflows.py::keyframe_graph</code></p>
+      </div>
+      <div class="viz">
+        <h4 style="margin:0 0 6px">Reference composition + identity gate</h4>
+        <svg id="design-svg" viewBox="0 0 560 320"></svg>
+        <div class="controls"><button class="btn" id="design-play">▶ Replay</button></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- RENDER -->
+  <div class="panel" id="panel-render" role="tabpanel">
+    <div class="io"><div class="box">keyframes + voice lines + shot motion prompts</div><div class="arrow">→</div><div class="box"><code>shots/sNN.mp4</code> per shot + <code>music/bed.wav</code></div></div>
+    <h3>Talk shots: InfiniteTalk windows</h3>
+    <p>InfiniteTalk renders 81 frames (3.24 s at 25 fps) per window. Longer lines are chained <em>inside one ComfyUI graph</em>: each new window receives all frames so far as <code>previous_frames</code>, re-renders the last 9 as motion context, and the node's <code>trim_image</code> output drops them before appending. The audio offset is derived from the accumulated frame count, so lips stay in sync across seams.</p>
+    <div class="viz">
+      <div class="controls">
+        <label class="muted">line length <input type="range" id="talk-sec" min="1" max="30" step="0.1" value="8"> <b id="talk-sec-v">8.0 s</b></label>
+        <span class="muted" id="talk-summary"></span>
+      </div>
+      <svg id="talk-svg" viewBox="0 0 1060 210"></svg>
+      <div class="legend"><span><i style="background:var(--s-render)"></i>new frames kept</span><span><i style="background:var(--warn)"></i>motion-context frames (re-rendered, trimmed)</span><span><i style="background:var(--ink-3)"></i>audio</span></div>
+    </div>
+    <h3>B-roll &amp; bridge: Wan2.2's two experts</h3>
+    <p>Wan2.2-A14B is a mixture of two 14B experts: the <em>high-noise</em> model lays out motion and composition, the <em>low-noise</em> model refines detail. We run two <code>KSamplerAdvanced</code> passes with the split at half the steps; draft mode adds the lightx2v 4-step LoRAs at CFG 1.</p>
+    <div class="viz">
+      <div class="controls"><button class="btn" id="expert-draft" aria-pressed="true">draft · 4 steps</button><button class="btn" id="expert-final" aria-pressed="false">final · 20 steps</button></div>
+      <svg id="expert-svg" viewBox="0 0 1060 150"></svg>
+    </div>
+    <p class="muted">Shots render grouped by model family (all talk shots, then all Wan2.2 shots) so the 14B checkpoints aren't swapped per shot. Code: <code>afterstage/stages/render.py</code>, <code>render/__init__.py</code>, <code>comfy/workflows.py</code></p>
+  </div>
+
+  <!-- EDIT -->
+  <div class="panel" id="panel-edit" role="tabpanel">
+    <div class="io"><div class="box">shots, voice lines, music bed, source clip</div><div class="arrow">→</div><div class="box"><code>final/&lt;title&gt;.mp4</code> + <code>.srt</code></div></div>
+    <div class="grid-2">
+      <div>
+        <h3>Pure ffmpeg + Pillow</h3>
+        <ol>
+          <li><strong>Conform</strong> every clip to one format (1280×720, 25 fps, yuv420p, 48 kHz stereo; silent tracks added) — cached per clip.</li>
+          <li><strong>Concat</strong> source → generated shots with the concat demuxer (stream copy).</li>
+          <li><strong>Mix</strong> the music bed only under the generated part, with fades and <code>sidechaincompress</code> ducking keyed by dialogue.</li>
+          <li><strong>Overlay</strong> subtitles and the AI badge as Pillow-rendered PNGs (CJK fonts, no libass needed) with time-gated <code>overlay</code> filters.</li>
+          <li><strong>Tag</strong> provenance metadata (generator, AI-generated, prompt, start time of synthetic part).</li>
+        </ol>
+        <p class="muted">Code: <code>afterstage/editor/__init__.py</code></p>
+      </div>
+      <div class="viz">
+        <h4 style="margin:0 0 6px">Timeline</h4>
+        <svg id="timeline-svg" viewBox="0 0 560 300"></svg>
+        <div class="controls"><button class="btn" id="timeline-play">▶ Play</button></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ================================================================ GRAPHS -->
+<section id="graphs">
+  <div class="kicker">04 · ComfyUI graphs</div>
+  <h2>The real workflows, rendered from code</h2>
+  <p class="lede">These are the exact API-format prompts <code>afterstage/comfy/workflows.py</code> builds (exported by <code>script/build_data.py</code>). Each graph is checked by a static validator against ComfyUI's <code>/object_info</code> schema — unknown nodes, missing inputs, wrong link types, enum values, model files — before it's queued, and all of them were accepted by a live ComfyUI server's own validator.</p>
+  <div class="controls" id="graph-buttons"></div>
+  <p class="muted" id="graph-title"></p>
+  <div class="graph-scroll"><svg id="graph-svg"></svg></div>
+  <div class="legend" id="graph-legend"></div>
+  <div class="card" style="margin-top:14px"><h3 id="insp-title">Click a node</h3><div class="node-inspector" id="insp-body">Inputs of the selected node appear here; its links light up. Links show as <code>→ #id.slot (NodeType)</code>.</div></div>
+</section>
+
+<!-- ================================================================ CACHE -->
+<section id="cache">
+  <div class="kicker">05 · Content-addressed caching</div>
+  <h2>Edit anything, re-render only what changed</h2>
+  <p class="lede">Every artifact goes through <code>Project.cached(key, inputs, produce)</code>. The inputs (text, config, models, <em>and the size+mtime of input files</em>) are hashed; a hit with the same fingerprint skips work. Because a shot's video fingerprint includes its keyframe and audio files, invalidation propagates down the chain automatically.</p>
+  <div class="controls" id="cache-buttons"></div>
+  <div class="viz">
+    <div class="cache-grid" id="cache-grid"></div>
+    <p class="muted" id="cache-note" style="margin-top:10px"></p>
+    <div class="legend"><span><i style="background:color-mix(in srgb, var(--ok) 40%, transparent)"></i>cache hit</span><span><i style="background:color-mix(in srgb, var(--warn) 60%, transparent)"></i>regenerated</span></div>
+  </div>
+</section>
+
+<!-- ================================================================ MEMORY -->
+<section id="memory">
+  <div class="kicker">06 · Memory budget</div>
+  <h2>Fitting a film studio in 128 GB of unified memory</h2>
+  <p class="lede">The GB10 shares 128 GB between CPU and GPU. Weights below come from <code>afterstage/models.yaml</code> (fp8 where available). Stages run sequentially and release what they don't need: the LLM is unloaded after writing, TTS after voicing, ComfyUI's cache is freed between stage groups.</p>
+  <div class="controls"><button class="btn" id="mem-seq" aria-pressed="true">Sequential (as built)</button><button class="btn" id="mem-all" aria-pressed="false">Everything resident</button></div>
+  <div class="viz" id="mem-viz"></div>
+</section>
+
+<!-- ================================================================ SAFETY -->
+<section id="safety">
+  <div class="kicker">07 · On-device &amp; responsible use</div>
+  <h2>Nothing leaves the box; nothing pretends to be real</h2>
+  <div class="grid-2">
+    <div>
+      <div class="card" style="margin-bottom:14px"><h3>Locality guard</h3><p><code>config.ensure_local()</code> resolves every LLM/VLM/ComfyUI URL and refuses public addresses unless <code>privacy.allow_remote: true</code>. ComfyUI runs with <code>--disable-api-nodes</code>; Gradio/HF telemetry is disabled at import; setup sets <code>HF_HUB_OFFLINE=1</code> after warming caches.</p></div>
+      <div class="card" style="margin-bottom:14px"><h3>Disclosure baked into the edit</h3><p>A visible <strong>AI-generated</strong> badge on every synthetic frame, and an embedded provenance comment (<code>ai_generated: true</code>, prompt, where synthesis starts). Both on by default.</p></div>
+      <div class="card"><h3>Writer guardrails</h3><p>The system prompt forbids sexual, hateful or defamatory content about real people, and forbids inventing group members; extra people must be declared as guests.</p></div>
+    </div>
+    <figure><img src="assets/dryrun-talk-frame.jpg" alt="Dry-run frame with Korean subtitle and AI-generated badge" loading="lazy"><figcaption>Real output of the dry-run editor: Pillow-rendered Hangul subtitle + AI badge (placeholder visuals; the real run puts InfiniteTalk footage here).</figcaption></figure>
+  </div>
+</section>
+
+<!-- ================================================================ TESTING -->
+<section id="testing">
+  <div class="kicker">08 · Testing guide</div>
+  <h2>How to test it, level by level</h2>
+  <p class="lede">Levels 0–1 run anywhere (no GPU). Levels 2–6 run on the DGX Spark. Tick items as you go — progress is saved in this browser.</p>
+
+  <div class="level"><h3>Level 0 · Unit &amp; integration tests (any machine)</h3></div>
+  <ol class="steps">
+    <li><h4>Create the dev environment</h4>
+      <div class="codeblock"><pre>uv venv -p 3.12 .venv
+uv pip install -p .venv/bin/python -e ".[dev]"</pre></div></li>
+    <li><h4>Run the suite</h4>
+      <div class="codeblock"><pre>.venv/bin/python -m pytest -q        <span class="c"># expect: 22 passed</span>
+.venv/bin/ruff check afterstage tests  <span class="c"># expect: All checks passed!</span></pre></div>
+      <p>What it covers:</p>
+      <ul id="test-list" class="muted"></ul></li>
+  </ol>
+  <div class="check" data-id="l0"><input type="checkbox" id="c-l0"><label for="c-l0"><span>22 tests pass, lint clean</span></label></div>
+
+  <div class="level"><h3>Level 1 · Dry run (any machine, no models)</h3></div>
+  <p>Template writer + placeholder TTS + ffmpeg placeholder video. Every stage, the cache and the editor run for real.</p>
+  <ol class="steps">
+    <li><h4>Make any test clip (or use a real one)</h4>
+      <div class="codeblock"><pre>ffmpeg -f lavfi -i testsrc2=s=1280x720:r=30:d=6 -f lavfi -i sine=f=440:d=6 \
+  -c:v libx264 -pix_fmt yuv420p -c:a aac -shortest clip.mp4</pre></div></li>
+    <li><h4>Run everything</h4>
+      <div class="codeblock"><pre>.venv/bin/afterstage --dry-run make clip.mp4 -o projects/dry \
+  -p "a podcast after the show" --cast "Ari,Bora"
+.venv/bin/afterstage status projects/dry</pre></div>
+      <p>Expect <code>projects/dry/final/after_the_show.mp4</code> (~32 s: 6 s source + generated part) and an <code>.srt</code>.</p></li>
+    <li><h4>Prove incremental re-render</h4>
+      <div class="codeblock"><pre><span class="c"># run again: every stage logs nothing to generate</span>
+.venv/bin/afterstage --dry-run run projects/dry
+<span class="c"># edit one "line" in projects/dry/screenplay.json, run again:</span>
+.venv/bin/afterstage --dry-run run projects/dry   <span class="c"># only voice/shot/conform of that shot regenerate</span></pre></div></li>
+  </ol>
+  <div class="grid-2">
+    <figure><video src="assets/dryrun-final.mp4" controls preload="metadata" muted playsinline></video><figcaption>The actual dry-run output (downscaled). Placeholder visuals/tones, real editing pipeline.</figcaption></figure>
+    <figure><img src="assets/dryrun-contact-sheet.jpg" alt="Contact sheet of the dry-run output" loading="lazy"><figcaption>Contact sheet every 2.6 s: source test pattern → bridge → b-roll → talk shots with subtitles → outro.</figcaption></figure>
+  </div>
+  <div class="check" data-id="l1a"><input type="checkbox" id="c-l1a"><label for="c-l1a"><span>Dry run produces final mp4 + srt</span></label></div>
+  <div class="check" data-id="l1b"><input type="checkbox" id="c-l1b"><label for="c-l1b"><span>Second run regenerates nothing; a line edit regenerates only that shot</span></label></div>
+
+  <div class="level"><h3>Level 2 · Install on the DGX Spark</h3></div>
+  <ol class="steps">
+    <li><h4>Setup (≈1–2 h, ~140 GB downloads)</h4>
+      <div class="codeblock"><pre>git clone https://github.com/tianhaoz95/afterstage ~/afterstage && cd ~/afterstage
+bash scripts/setup_spark.sh            <span class="c"># or SKIP_MODELS=1 for software only</span>
+source scripts/afterstage.env
+bash scripts/start_services.sh</pre></div>
+      <p>The script asserts CUDA is visible in both venvs and that Chatterbox imports. Watch for: aarch64 wheel builds (insightface compiles), the Chatterbox <code>--no-deps</code> step.</p></li>
+    <li><h4>Doctor</h4>
+      <div class="codeblock"><pre>.venv/bin/afterstage doctor --comfy-dir $COMFYUI_DIR</pre></div>
+      <p>Every line should be ✓: ffmpeg, LLM, VLM, TTS, ComfyUI (shows GB10 + memory), <strong>workflow keyframe/talk/broll/music validated against your ComfyUI's live schema</strong>, and model files present. A workflow ✗ means your ComfyUI version renamed a node input — the message names it.</p></li>
+  </ol>
+  <div class="check" data-id="l2"><input type="checkbox" id="c-l2"><label for="c-l2"><span><code>doctor</code> all green</span></label></div>
+
+  <div class="level"><h3>Level 3 · Stage smoke tests on the Spark</h3></div>
+  <p>Use a short real clip (20–40 s, a few clearly visible faces, some speech). Run stage by stage and inspect each artifact before moving on.</p>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Command</th><th>Inspect</th><th>Good looks like</th><th>If not</th></tr></thead>
+    <tbody>
+      <tr><td><code>afterstage new p --clip c.mp4 -p "…" --cast "A,B"</code><br><code>afterstage analyze p</code></td><td><code>p/analysis/faces/*.jpg</code>, <code>afterstage cast p</code></td><td>One cluster per person, sharp frontal crops, sensible appearance text, transcript segments</td><td>Merged people → raise <code>-s analysis.face_cluster_threshold=0.55</code>; split person → lower it; crowd faces → raise <code>face_min_size</code></td></tr>
+      <tr><td><code>afterstage set-voice p m1 --file a.wav</code></td><td><code>p/analysis/voices/m1.wav</code></td><td>Clean speech, 5–20 s</td><td>Use <code>--start/--end</code> on a speaking moment of the vocal stem</td></tr>
+      <tr><td><code>afterstage write p</code></td><td><code>p/screenplay.json</code></td><td>Valid ids, natural lines, 1–3 sets, bridge first</td><td>Repair loop failed → try <code>-s llm.model=gpt-oss:120b</code>; edit JSON by hand</td></tr>
+      <tr><td><code>afterstage voice p</code></td><td><code>p/audio/*.wav</code></td><td>Recognisable voice, right language, no clipping</td><td>Better sample; adjust <code>tts.cfg_weight</code> (lower = slower, steadier)</td></tr>
+      <tr><td><code>afterstage design p</code></td><td><code>p/sets/</code>, <code>p/keyframes/</code></td><td>Faces resemble members, outfits match, no text artifacts</td><td><code>afterstage design p --shot s04</code> to re-roll; <code>--profile final</code> for 40-step keyframes</td></tr>
+      <tr><td><code>afterstage render p --shot s03</code></td><td><code>p/shots/s03.mp4</code></td><td>Lips match audio; no seam jump every 3.2 s</td><td>Raise <code>render.profiles.draft.talk_steps</code>; check ComfyUI log for OOM</td></tr>
+      <tr><td><code>afterstage render p</code> then <code>afterstage edit p</code></td><td><code>p/final/*.mp4</code></td><td>Seamless bridge, ducked music, subtitles, badge</td><td><code>-s edit.music=false</code> to isolate audio issues</td></tr>
+    </tbody>
+  </table></div>
+  <div class="check" data-id="l3"><input type="checkbox" id="c-l3"><label for="c-l3"><span>Each stage's artifacts inspected and acceptable</span></label></div>
+
+  <div class="level"><h3>Level 4 · First full draft &amp; timing</h3></div>
+  <div class="codeblock"><pre>time .venv/bin/afterstage make concert.mp4 -o projects/podcast --cast "A,B,C,D" \
+  -p "A cosy podcast right after the concert; they laugh about a mistake nobody noticed" --review
+<span class="c"># review projects/podcast/screenplay.json, then:</span>
+time .venv/bin/afterstage run projects/podcast
+nvidia-smi --query-gpu=memory.used --format=csv -l 5   <span class="c"># in another shell</span></pre></div>
+  <p>Record per-shot times from the log (<code>→ generating shot/…</code> timestamps) and peak memory. Compare against the README estimates and adjust <code>render.profiles</code>.</p>
+  <div class="check" data-id="l4"><input type="checkbox" id="c-l4"><label for="c-l4"><span>Full draft completes; timings and peak memory recorded</span></label></div>
+
+  <div class="level"><h3>Level 5 · Incremental edits on real models</h3></div>
+  <p>Change one line → <code>afterstage run</code> should re-voice and re-render only that shot (minutes, not hours). Swap one member's voice sample → only their lines re-render. Rename a member → only the screenplay needs rewriting (<code>write --force</code>).</p>
+  <div class="check" data-id="l5"><input type="checkbox" id="c-l5"><label for="c-l5"><span>Single-shot edits re-render in minutes</span></label></div>
+
+  <div class="level"><h3>Level 6 · Final quality &amp; UI</h3></div>
+  <div class="codeblock"><pre>.venv/bin/afterstage --profile final run projects/podcast   <span class="c"># 720p, full steps — overnight</span>
+.venv/bin/afterstage ui --root projects                     <span class="c"># then on your laptop:</span>
+ssh -L 7860:localhost:7860 spark                             <span class="c"># open http://localhost:7860</span></pre></div>
+  <div class="check" data-id="l6"><input type="checkbox" id="c-l6"><label for="c-l6"><span>Final profile render reviewed; UI flow New → Cast → Script → Keyframes → Render works</span></label></div>
+
+  <h3 style="margin-top:28px">Troubleshooting</h3>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Symptom</th><th>Likely cause</th><th>Fix</th></tr></thead>
+    <tbody>
+      <tr><td><code>ConfigError: … not on this machine or LAN</code></td><td>Locality guard</td><td>Point the URL at 127.0.0.1 / LAN, or set <code>privacy.allow_remote: true</code> deliberately</td></tr>
+      <tr><td><code>workflow does not match this ComfyUI install</code></td><td>ComfyUI version renamed a node input</td><td>Update ComfyUI, or adjust the builder in <code>comfy/workflows.py</code>; re-run <code>doctor</code></td></tr>
+      <tr><td><code>value not in list: unet_name</code></td><td>Model file missing / different filename</td><td><code>afterstage models download</code>, or change <code>models:</code> in config</td></tr>
+      <tr><td>CUDA OOM mid-render</td><td>Too many models resident with <code>--highvram</code></td><td>Remove <code>--highvram</code> in <code>start_services.sh</code>; ensure Ollama unloaded (<code>ollama ps</code>)</td></tr>
+      <tr><td><code>model never produced valid output</code></td><td>LLM can't satisfy the schema</td><td>Bigger model, <code>-s writer.repair_attempts=5</code>, or hand-edit the JSON</td></tr>
+      <tr><td>Boxes instead of Hangul in subtitles</td><td>No CJK font</td><td><code>sudo apt install fonts-noto-cjk</code> or set <code>edit.font</code></td></tr>
+      <tr><td>Chatterbox import error</td><td>Dependency pin drift on aarch64</td><td>Re-run the <code>--no-deps</code> block in <code>setup_spark.sh</code>; check <code>transformers==5.2.0</code></td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<!-- ================================================================ STATUS -->
+<section id="status">
+  <div class="kicker">09 · Status</div>
+  <h2>What's verified, what isn't yet</h2>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Area</th><th>State</th><th>Evidence</th></tr></thead>
+    <tbody>
+      <tr><td>Orchestration, cache, incremental re-render</td><td><span class="pill ok">verified</span></td><td>End-to-end dry-run test incl. “edit one line → only that shot regenerates”</td></tr>
+      <tr><td>Editor (conform, concat, ducking, subtitles, badge, metadata)</td><td><span class="pill ok">verified</span></td><td>Dry-run output above; ffprobe of streams + metadata</td></tr>
+      <tr><td>ComfyUI graphs</td><td><span class="pill ok">schema-verified</span></td><td>Static validator vs recorded <code>/object_info</code>; accepted by a live ComfyUI (CPU) validator</td></tr>
+      <tr><td>ComfyUI client protocol</td><td><span class="pill ok">verified</span></td><td>Fake-server test: upload → prompt → history → view</td></tr>
+      <tr><td>LLM structured output + repair loop</td><td><span class="pill ok">verified (mocked)</span></td><td>Mock-transport test feeds back validation errors</td></tr>
+      <tr><td>Model download URLs</td><td><span class="pill ok">verified</span></td><td>All resolve (HTTP 200)</td></tr>
+      <tr><td>Web UI</td><td><span class="pill warn">smoke-tested</span></td><td>Launches and serves; handlers reuse tested stage functions</td></tr>
+      <tr><td>GPU path (Whisper, Demucs, InsightFace, Chatterbox, real diffusion)</td><td><span class="pill bad">not yet run</span></td><td>Needs a first run on the Spark — Levels 2–6 above</td></tr>
+      <tr><td>Two-person lip-sync in one frame</td><td><span class="pill bad">not built</span></td><td>InfiniteTalk <code>two_speakers</code> mode exists; needs masks</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<!-- ================================================================ REPO -->
+<section id="repo">
+  <div class="kicker">10 · Repo map</div>
+  <h2>Where things live</h2>
+  <div class="grid-2">
+    <div class="viz" id="loc-viz"></div>
+    <div>
+      <div class="codeblock"><pre>afterstage/
+  cli.py          <span class="c">typer CLI (new, make, run, analyze, write, …)</span>
+  pipeline.py     <span class="c">stage orchestration</span>
+  project.py      <span class="c">workspace + content-addressed cache</span>
+  schema.py       <span class="c">CastBible / Screenplay (pydantic)</span>
+  config.py       <span class="c">YAML config + locality guard</span>
+  llm.py          <span class="c">local OpenAI-compatible client, repair loop</span>
+  analysis/       <span class="c">scenes, faces, audio</span>
+  stages/         <span class="c">analyze, write, voice, design, render</span>
+  tts/            <span class="c">Chatterbox, dummy</span>
+  comfy/          <span class="c">graph builder, validator, workflows, client</span>
+  render/         <span class="c">ComfyRenderer, DummyRenderer</span>
+  editor/         <span class="c">the cut</span>
+  ui/app.py       <span class="c">Gradio UI</span>
+  default_config.yaml · models.yaml
+scripts/          <span class="c">setup_spark.sh, start_services.sh</span>
+tests/            <span class="c">22 tests + object_info fixture</span>
+reports/project-walkthrough/   <span class="c">this site</span></pre></div>
+    </div>
+  </div>
+</section>
+</main>
+<footer>afterstage · walkthrough generated from the code in this repo · serve with <code>reports/project-walkthrough/script/serve.sh</code></footer>
+<script src="app.js"></script>
+</body>
+</html>

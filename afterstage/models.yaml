@@ -1,0 +1,28 @@
+# Model weights for the ComfyUI side, keyed by the config name in afterstage/default_config.yaml `models:`.
+# `afterstage models download` fetches them into $COMFYUI_DIR/models/<folder>/ (resumable).
+# Sizes are approximate. Total for the default set: ~110 GB.
+# Groups let you skip what you don't need: --groups keyframe,talk,broll,music
+models:
+  keyframe_unet:     {group: keyframe, folder: diffusion_models, gb: 20.4, url: "https://huggingface.co/Comfy-Org/Qwen-Image-Edit_ComfyUI/resolve/main/split_files/diffusion_models/qwen_image_edit_2511_fp8mixed.safetensors"}
+  keyframe_clip:     {group: keyframe, folder: text_encoders,    gb: 9.4,  url: "https://huggingface.co/Comfy-Org/HunyuanVideo_1.5_repackaged/resolve/main/split_files/text_encoders/qwen_2.5_vl_7b_fp8_scaled.safetensors"}
+  keyframe_vae:      {group: keyframe, folder: vae,              gb: 0.25, url: "https://huggingface.co/Comfy-Org/Qwen-Image_ComfyUI/resolve/main/split_files/vae/qwen_image_vae.safetensors"}
+  keyframe_lora:     {group: keyframe, folder: loras,            gb: 0.85, url: "https://huggingface.co/lightx2v/Qwen-Image-Edit-2511-Lightning/resolve/main/Qwen-Image-Edit-2511-Lightning-4steps-V1.0-bf16.safetensors"}
+
+  wan_clip:          {group: [talk, broll], folder: text_encoders, gb: 6.7, url: "https://huggingface.co/Comfy-Org/Wan_2.1_ComfyUI_repackaged/resolve/main/split_files/text_encoders/umt5_xxl_fp8_e4m3fn_scaled.safetensors"}
+
+  talk_unet:         {group: talk, folder: diffusion_models, gb: 17.0, url: "https://huggingface.co/Kijai/WanVideo_comfy_fp8_scaled/resolve/main/I2V/Wan2_1-I2V-14B-480p_fp8_e4m3fn_scaled_KJ.safetensors"}
+  talk_lora:         {group: talk, folder: loras,            gb: 0.7,  url: "https://huggingface.co/Kijai/WanVideo_comfy/resolve/main/Lightx2v/lightx2v_I2V_14B_480p_cfg_step_distill_rank64_bf16.safetensors"}
+  talk_patch:        {group: talk, folder: model_patches,    gb: 5.1,  url: "https://huggingface.co/Comfy-Org/Wan_2.1_ComfyUI_repackaged/resolve/main/split_files/model_patches/wan2.1_infiniteTalk_single_fp16.safetensors"}
+  talk_audio_encoder: {group: talk, folder: audio_encoders,  gb: 0.2,  url: "https://huggingface.co/Kijai/wav2vec2_safetensors/resolve/main/wav2vec2-chinese-base_fp16.safetensors"}
+  talk_vae:          {group: talk, folder: vae,              gb: 0.25, url: "https://huggingface.co/Kijai/WanVideo_comfy/resolve/main/Wan2_1_VAE_bf16.safetensors"}
+
+  wan_vae:           {group: broll, folder: vae,              gb: 0.25, url: "https://huggingface.co/Comfy-Org/Wan_2.2_ComfyUI_Repackaged/resolve/main/split_files/vae/wan_2.1_vae.safetensors"}
+  broll_unet_high:   {group: broll, folder: diffusion_models, gb: 14.3, url: "https://huggingface.co/Comfy-Org/Wan_2.2_ComfyUI_Repackaged/resolve/main/split_files/diffusion_models/wan2.2_i2v_high_noise_14B_fp8_scaled.safetensors"}
+  broll_unet_low:    {group: broll, folder: diffusion_models, gb: 14.3, url: "https://huggingface.co/Comfy-Org/Wan_2.2_ComfyUI_Repackaged/resolve/main/split_files/diffusion_models/wan2.2_i2v_low_noise_14B_fp8_scaled.safetensors"}
+  broll_lora_high:   {group: broll, folder: loras,            gb: 1.2,  url: "https://huggingface.co/Comfy-Org/Wan_2.2_ComfyUI_Repackaged/resolve/main/split_files/loras/wan2.2_i2v_lightx2v_4steps_lora_v1_high_noise.safetensors"}
+  broll_lora_low:    {group: broll, folder: loras,            gb: 1.2,  url: "https://huggingface.co/Comfy-Org/Wan_2.2_ComfyUI_Repackaged/resolve/main/split_files/loras/wan2.2_i2v_lightx2v_4steps_lora_v1_low_noise.safetensors"}
+
+  music_unet:        {group: music, folder: diffusion_models, gb: 9.0, url: "https://huggingface.co/Comfy-Org/ace_step_1.5_ComfyUI_files/resolve/main/split_files/diffusion_models/acestep_v1.5_xl_turbo_bf16.safetensors"}
+  music_vae:         {group: music, folder: vae,              gb: 0.3, url: "https://huggingface.co/Comfy-Org/ace_step_1.5_ComfyUI_files/resolve/main/split_files/vae/ace_1.5_vae.safetensors"}
+  music_clip1:       {group: music, folder: text_encoders,    gb: 1.2, url: "https://huggingface.co/Comfy-Org/ace_step_1.5_ComfyUI_files/resolve/main/split_files/text_encoders/qwen_0.6b_ace15.safetensors"}
+  music_clip2:       {group: music, folder: text_encoders,    gb: 8.0, url: "https://huggingface.co/Comfy-Org/ace_step_1.5_ComfyUI_files/resolve/main/split_files/text_encoders/qwen_4b_ace15.safetensors"}

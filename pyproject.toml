@@ -1,0 +1,53 @@
+[project]
+name = "afterstage"
+version = "0.1.0"
+description = "Extend a movie clip with on-device AI: turn a concert clip into an interview, podcast, or continuation, driven by a text prompt."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+dependencies = [
+  "pydantic>=2.6",
+  "pyyaml>=6",
+  "httpx>=0.27",
+  "typer>=0.12",
+  "rich>=13",
+  "numpy>=1.26",
+  "pillow>=10",
+  "opencv-python-headless>=4.9",
+  "scenedetect>=0.6.4",
+]
+
+[project.optional-dependencies]
+# Heavy, GPU-side analysis + TTS stack. Installed on the DGX Spark by scripts/setup_spark.sh
+# (torch itself is installed from the cu130 index first, so it is not pinned here).
+gpu = [
+  "transformers>=4.46",
+  "accelerate>=1.0",
+  "librosa>=0.10",
+  "soundfile>=0.12",
+  "demucs>=4.0.1",
+  "insightface>=0.7.3",
+  "onnxruntime>=1.18",
+]
+ui = ["gradio>=5"]
+dev = ["pytest>=8", "ruff>=0.6"]
+
+[project.scripts]
+afterstage = "afterstage.cli:app"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["afterstage"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 110
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP"]
+ignore = ["B008", "E731", "E501"]  # typer uses call defaults by design
